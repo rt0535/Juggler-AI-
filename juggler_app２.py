@@ -1,76 +1,109 @@
 import streamlit as st
 import pandas as pd
-import joblib
 import numpy as np
+import joblib
 
-# --- 設定 ---
-PAYBACK_RATES = {1: 0.970, 2: 0.980, 3: 0.995, 4: 1.011, 5: 1.033, 6: 1.055}
-TRUST_CONSTANT = 3000
+# ページ設定
+st.set_page_config(page_title="最強脳ジャグラーAI", layout="centered")
 
-# モデルの読み込み
+st.title("🎰 最強脳：実戦判定ツール")
+st.caption("設定推測分布 × 期待収支シミュレーター")
+
+# モデルの読み込み（ファイル名は軽量化したものに合わせてください）
 @st.cache_resource
 def load_model():
     return joblib.load('juggler_ai_model_pro_light.pkl')
 
-model = load_model()
+try:
+    model = load_model()
+except:
+    st.error("モデルファイル 'juggler_ai_model_pro_light.pkl' が見つかりません。")
+    st.stop()
 
-# --- UI部分 ---
-st.set_page_config(page_title="Juggler AI Analyzer", layout="centered")
-st.title("🎰 ジャグラー設定推測 AI")
-st.caption("現場で即座に期待値を算出します")
-
+# --- 入力フォーム ---
 with st.form("input_form"):
-    st.subheader("現在の台データ入力")
-    
+    st.subheader("📊 現在の基本データ")
     col1, col2 = st.columns(2)
     with col1:
-        current_g = st.number_input("総回転数 (G)", min_value=0, value=1000, step=100)
-        big = st.number_input("BIG回数", min_value=0, value=3, step=1)
-        reg = st.number_input("REG回数", min_value=0, value=3, step=1)
-    
+        g = st.number_input("総回転数", min_value=1, value=1500, step=100)
+        big = st.number_input("BIG回数", min_value=0, value=5, step=1)
     with col2:
-        grape = st.number_input("ぶどう回数", min_value=0, value=160, step=1)
-        max_hamari = st.number_input("最大ハマり (G)", min_value=0, value=200, step=10)
+        reg = st.number_input("REG回数", min_value=0, value=5, step=1)
+        grape = st.number_input("ぶどう回数", min_value=0, value=250, step=1)
     
-    submitted = st.form_submit_button("AI判定を実行")
-
-if submitted:
-    # 前処理
-    reg_rate = current_g / max(1, reg)
-    v_rate = current_g / max(1, (big + reg))
-    
-    features = np.array([[current_g, big, reg, grape, max_hamari, reg_rate, v_rate]])
-    
-    # 予測
-    probs = model.predict_proba(features)[0]
-    pred_setting = model.predict(features)[0]
-    
-    # 信頼度補正計算
-    raw_payback = sum(probs[i] * PAYBACK_RATES[i+1] for i in range(6))
-    confidence = min(1.0, current_g / TRUST_CONSTANT)
-    adj_payback = (raw_payback * confidence) + (PAYBACK_RATES[1] * (1 - confidence))
-    
-    # --- 結果表示 ---
     st.divider()
+    st.subheader("📈 履歴と展開のデータ")
+    # ここが重要！履歴をカンマ区切りで入力
+    history_str = st.text_area("ボーナス履歴（カンマ区切りで入力）", 
+                               "100, 250, 50, 400, 120", 
+                               help="データ機の履歴を古い順、または新しい順にカンマで区切って入れてください")
     
-    # メイン結果
-    st.metric(label="AI予測設定", value=f"設定 {int(pred_setting)}")
+    st.divider()
+    st.subheader("📅 閉店までのシミュレーション")
+    remaining_g = st.slider("残り予定回転数", 500, 8000, 3000)
     
-    st.subheader("📊 解析詳細")
-    c1, c2 = st.columns(2)
-    c1.metric("期待機械割 (補正後)", f"{adj_payback*100:.2f}%")
-    c2.metric("データ信頼度", f"{confidence*100:.1f}%")
+    submit = st.form_submit_button("🔥 AI鑑定を実行")
 
-    # 棒グラフで設定期待度を可視化
-    st.write("各設定の期待度:")
-    chart_data = pd.DataFrame({
-        '設定': [f"設定{i}" for i in range(1, 7)],
-        '確率(%)': [p * 100 for p in probs]
-    })
-    st.bar_chart(data=chart_data, x='設定', y='確率(%)')
+# --- 判定ロジック ---
+if submit:
+    try:
+        # 履歴をリストに変換
+        history = [int(x.strip()) for x in history_str.split(",") if x.strip()]
+        if not history:
+            st.warning("履歴を1件以上入力してください。")
+            st.stop()
+            
+        # --- 追加特徴量の自動計算 ---
+        reg_r = reg / g
+        v_r = grape / g
+        diff_reg = reg_r - (1/255.0)
+        std_dev = np.std(history) if len(history) > 1 else 0
+        max_h = max(history)
+        
+        # 差枚数とボラティリティの概算
+        in_t = g * 3
+        out_t = (big * 240) + (reg * 96) + (grape * 8)
+        current_diff = out_t - in_t
+        volatility = np.abs(current_diff) / (g / 100)
 
-    if adj_payback > 1.0:
-        st.success(f"【続行推奨】期待値はプラスです（残り2000Gで約 {int((2000*3)*(adj_payback-1)*20):,}円）")
-    else:
+        # AI入力用データフレーム作成（学習時と同じ順番）
+        features = ['current_g', 'big', 'reg', 'grape', 'reg_rate', 'v_rate', 
+                    'diff_from_target_reg', 'std_dev_bonus_interval', 'volatility', 'max_hamari']
+        input_df = pd.DataFrame([[g, big, reg, grape, reg_r, v_r, diff_reg, std_dev, volatility, max_h]], columns=features)
+        
+        # AIの推論
+        probs = model.predict_proba(input_df)[0]
+        best_s = np.argmax(probs) + 1
+        
+        # 期待値計算（アイムジャグラー準拠）
+        pay_outs = np.array([0.970, 0.980, 0.991, 1.011, 1.033, 1.055])
+        expected_rtp = np.sum(probs * pay_outs)
+        exp_profit_yen = remaining_g * 3 * (expected_rtp - 1) * 20
+        hourly_rate = (exp_profit_yen / remaining_g) * 800
 
-        st.error("【注意】期待値が100%を下回っています。")
+        # --- 結果表示UI ---
+        st.divider()
+        st.header("🏁 判定結果")
+        
+        # 4つの指標をカード表示
+        m1, m2, m3 = st.columns(3)
+        m1.metric("予想設定", f"設定{best_s}")
+        m2.metric("期待時給", f"{hourly_rate:+,.0f}円")
+        m3.metric("現在枚数", f"{current_diff:+.0f}枚")
+
+        # 設定分布グラフ
+        prob_df = pd.DataFrame({"設定": [f"設定{i+1}" for i in range(6)], "確率(%)": probs * 100})
+        st.bar_chart(data=prob_df, x="設定", y="確率(%)")
+
+        # アドバイス
+        if hourly_rate >= 2000:
+            st.success(f"### 💡 結論: 続行推奨 🔥\n時給 {hourly_rate:,.0f} 円の期待値があります。")
+        elif hourly_rate > 0:
+            st.warning(f"### 💡 結論: 続行可能 👍\n時給 {hourly_rate:,.0f} 円。波を掴みましょう。")
+        else:
+            st.error(f"### 💡 結論: 撤退推奨 ✋\n期待時給がマイナスです。深追いは厳禁。")
+
+        st.info(f"計算詳細: 最大ハマリ {max_h}G / 標準偏差 {std_dev:.1f} / ぶどう確率 1/{1/v_r:.2f}")
+
+    except Exception as e:
+        st.error(f"エラーが発生しました: {e}")
