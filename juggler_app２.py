@@ -10,7 +10,7 @@ TRUST_CONSTANT = 3000
 # モデルの読み込み
 @st.cache_resource
 def load_model():
-    return joblib.load('juggler_ai_model.pkl')
+    return joblib.load('juggler_ai_model_pro_light.pkl')
 
 model = load_model()
 
@@ -72,4 +72,5 @@ if submitted:
     if adj_payback > 1.0:
         st.success(f"【続行推奨】期待値はプラスです（残り2000Gで約 {int((2000*3)*(adj_payback-1)*20):,}円）")
     else:
+
         st.error("【注意】期待値が100%を下回っています。")
